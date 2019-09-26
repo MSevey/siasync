@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"gitlab.com/NebulousLabs/Sia/api"
+	"gitlab.com/NebulousLabs/Sia/node/api"
 )
 
 var testFiles = []string{"test", "testdir/testfile3.txt", "testdir/testdir2/testfile4.txt", "testfile1.txt", "testfile2.txt"}
@@ -66,7 +66,7 @@ func TestSiafolder(t *testing.T) {
 	// should have uploaded all of our test files
 	for _, file := range testFiles {
 		if _, exists := mockClient.siaFiles[file]; !exists {
-			t.Fatal("our test files should have initially been uploaded if they didnt exist")
+			t.Fatal("our test files should have initially been uploaded if they didn't exist")
 		}
 	}
 }
@@ -93,7 +93,7 @@ func TestSiafolderCreateDelete(t *testing.T) {
 		os.Remove(f.Name())
 	}()
 
-	// wait a bit for the filesystem event to propogate
+	// wait a bit for the filesystem event to propagate
 	time.Sleep(time.Second)
 
 	if _, exists := mockClient.siaFiles["newfile"]; !exists {
@@ -110,7 +110,7 @@ func TestSiafolderCreateDelete(t *testing.T) {
 		t.Fatal("newfile should have been deleted when it was removed on disk")
 	}
 
-	// test that events propogate in nested directories
+	// test that events propagate in nested directories
 	newfile = filepath.Join(testDir, "testdir/newfile")
 	f, err = os.Create(newfile)
 	if err != nil {
@@ -196,7 +196,7 @@ func TestSiafolderFileWrite(t *testing.T) {
 		os.Remove(f.Name())
 	}()
 
-	// wait a bit for the filesystem event to propogate
+	// wait a bit for the filesystem event to propagate
 	time.Sleep(time.Second)
 
 	oldChecksum, exists := mockClient.siaFiles["newfile"]
