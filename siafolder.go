@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fsnotify/fsnotify"
+	"github.com/MSevey/fsnotify"
 
 	"gitlab.com/NebulousLabs/Sia/modules"
 	"gitlab.com/NebulousLabs/Sia/node/api"
@@ -230,19 +230,19 @@ func (sf *SiaFolder) eventWatcher() {
 				continue
 			}
 
-			// WRITE event, checksum the file and re-upload it if it has changed
-			if event.Op&fsnotify.Write == fsnotify.Write {
-				log.Println("Watcher found a write event for:", filename)
+			// UPDATE event, checksum the file and re-upload it if it has changed
+			if event.Op&fsnotify.Update == fsnotify.Update {
+				log.Println("Watcher found an update event for:", filename)
 				err = sf.handleFileWrite(filename)
 				if err != nil {
 					log.Println(err)
 				}
 			}
 
-			// CREATE event
-			if event.Op&fsnotify.Create == fsnotify.Create {
-				log.Println("Watcher found a create event for:", filename)
-				log.Println("file creation detected, uploading", filename)
+			// CLOSE event
+			if event.Op&fsnotify.Close == fsnotify.Close {
+				log.Println("Watcher found a close event for:", filename)
+				log.Println("file close detected, uploading", filename)
 				uploadRetry(sf, filename)
 			}
 

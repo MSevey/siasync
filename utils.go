@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"time"
 
 	"gitlab.com/NebulousLabs/Sia/modules"
 )
@@ -56,7 +55,6 @@ func sizeFile(path string) (string, error) {
 func uploadRetry(sf *SiaFolder, filename string) {
 	err := sf.handleCreate(filename)
 	if err != nil {
-		time.Sleep(30 * time.Second)
 		// check if we have received create event for a file that is already in sia
 		exists, err := sf.isFile(filename)
 		if err != nil {
