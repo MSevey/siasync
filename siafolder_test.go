@@ -1,72 +1,84 @@
 package main
 
 import (
-	"net/url"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
-	"gitlab.com/NebulousLabs/Sia/api"
+	sia "gitlab.com/NebulousLabs/Sia/node/api/client"
+	"gitlab.com/NebulousLabs/Sia/siatest"
 )
-
-var testFiles = []string{"test", "testdir/testfile3.txt", "testdir/testdir2/testfile4.txt", "testfile1.txt", "testfile2.txt"}
 
 const testDir = "test"
 
-type testingClient struct {
-	siaFiles map[string]string
-}
+var (
+	// siaSyncTestingDir is the directory that contains all of the files and
+	// folders created during testing.
+	siaSyncTestingDir = filepath.Join(os.TempDir(), "SiaSync")
 
-func newTestingClient() *testingClient {
-	return &testingClient{
-		siaFiles: make(map[string]string),
-	}
-}
+	// These are the files that should be uploaded
+	testFiles = []string{"test", "testdir/testfile3.txt", "testdir/testdir2/testfile4.txt", "testfile1.txt", "testfile2.txt"}
+)
 
-func (t *testingClient) Get(resource string, obj interface{}) error {
-	if resource == "/renter/contracts" {
-		rc := obj.(*api.RenterContracts)
-		rc.Contracts = make([]api.RenterContract, 50)
-		return nil
-	}
-	return nil
-}
-
-func (t *testingClient) Post(resource string, data string, obj interface{}) error {
-	params, err := url.ParseQuery(data)
+// mainTestDir creates a testing directory for tests in the main package.
+func mainTestDir(testName string) string {
+	path := filepath.Join(siaSyncTestingDir, filepath.Join("main", testName))
+	err := os.RemoveAll(path)
 	if err != nil {
-		return err
+		panic(err)
 	}
-	if strings.Index(resource, "/renter/upload/") == 0 {
-		path := strings.Split(resource, "/renter/upload/")[1]
-		checksum, err := checksumFile(params.Get("source"))
-		if err != nil {
-			return err
-		}
-		t.siaFiles[path] = checksum
+	if err := os.MkdirAll(path, 0777); err != nil {
+		panic(err)
 	}
-	if strings.Index(resource, "/renter/delete/") == 0 {
-		path := strings.Split(resource, "/renter/delete/")[1]
-		delete(t.siaFiles, path)
-	}
-	return nil
+	return path
 }
 
-func TestSiafolder(t *testing.T) {
-	mockClient := newTestingClient()
+// newTestClient returns a client that SiaSync needs for testing
+func newTestClient(tn *siatest.TestNode) *sia.Client {
+	sc := sia.New(tn.Address)
+	sc.Password = tn.Password
+	sc.UserAgent = tn.UserAgent
+	return sc
+}
 
-	sf, err := NewSiafolder(testDir, mockClient)
+// TestSiafolder confirms that a call to NewSiaFolder will upload all the files
+// in the test directory
+func TestSiafolder(t *testing.T) {
+	// Create a group
+	groupParams := siatest.GroupParams{
+		Hosts:   5,
+		Renters: 1,
+		Miners:  1,
+	}
+	tg, err := siatest.NewGroupFromTemplate(mainTestDir(t.Name()), groupParams)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer sf.Close()
+	defer func() {
+		if err := tg.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}()
 
-	// should have uploaded all of our test files
+	// Create a client for siasync
+	sc := newTestClient(tg.Renters()[0])
+
+	// Create a new siafolder
+	sf, err := NewSiafolder(testDir, sc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := sf.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}()
+
+	// Confirm all the files were uploaded
 	for _, file := range testFiles {
-		if _, exists := mockClient.siaFiles[file]; !exists {
-			t.Fatal("our test files should have initially been uploaded if they didnt exist")
+		if _, exists := sf.files[file]; !exists {
+			t.Fatalf("File %v not uploaded to siafolder", file)
 		}
 	}
 }
@@ -74,12 +86,35 @@ func TestSiafolder(t *testing.T) {
 // TestSiafolderCreateDelete verifies that files created or removed in the
 // watched directory are correctly uploaded and deleted.
 func TestSiafolderCreateDelete(t *testing.T) {
-	mockClient := newTestingClient()
-	sf, err := NewSiafolder(testDir, mockClient)
+	// Create a group
+	groupParams := siatest.GroupParams{
+		Hosts:   5,
+		Renters: 1,
+		Miners:  1,
+	}
+	tg, err := siatest.NewGroupFromTemplate(mainTestDir(t.Name()), groupParams)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer sf.Close()
+	defer func() {
+		if err := tg.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}()
+
+	// Create a client for siasync
+	sc := newTestClient(tg.Renters()[0])
+
+	// Create a new siafolder
+	sf, err := NewSiafolder(testDir, sc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := sf.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}()
 
 	// create a new file and write some data to it and verify that it gets
 	// uploaded
@@ -93,10 +128,10 @@ func TestSiafolderCreateDelete(t *testing.T) {
 		os.Remove(f.Name())
 	}()
 
-	// wait a bit for the filesystem event to propogate
+	// wait a bit for the filesystem event to propagate
 	time.Sleep(time.Second)
 
-	if _, exists := mockClient.siaFiles["newfile"]; !exists {
+	if _, exists := sf.files["newfile"]; !exists {
 		t.Fatal("newfile should have been uploaded when it was created on disk")
 	}
 
@@ -106,11 +141,11 @@ func TestSiafolderCreateDelete(t *testing.T) {
 
 	time.Sleep(time.Second)
 
-	if _, exists := mockClient.siaFiles["newfile"]; exists {
+	if _, exists := sf.files["newfile"]; exists {
 		t.Fatal("newfile should have been deleted when it was removed on disk")
 	}
 
-	// test that events propogate in nested directories
+	// test that events propagate in nested directories
 	newfile = filepath.Join(testDir, "testdir/newfile")
 	f, err = os.Create(newfile)
 	if err != nil {
@@ -123,7 +158,7 @@ func TestSiafolderCreateDelete(t *testing.T) {
 
 	time.Sleep(time.Second)
 
-	if _, exists := mockClient.siaFiles["testdir/newfile"]; !exists {
+	if _, exists := sf.files["testdir/newfile"]; !exists {
 		t.Fatal("newfile should have been uploaded when it was created on disk")
 	}
 
@@ -133,7 +168,7 @@ func TestSiafolderCreateDelete(t *testing.T) {
 
 	time.Sleep(time.Second)
 
-	if _, exists := mockClient.siaFiles["testdir/newfile"]; exists {
+	if _, exists := sf.files["testdir/newfile"]; exists {
 		t.Fatal("newfile should have been deleted when it was removed on disk")
 	}
 }
@@ -141,12 +176,35 @@ func TestSiafolderCreateDelete(t *testing.T) {
 // TestSiafolderCreateDirectory verifies that files in newly created
 // directories under the watched directory get correctly uploaded.
 func TestSiafolderCreateDirectory(t *testing.T) {
-	mockClient := newTestingClient()
-	sf, err := NewSiafolder(testDir, mockClient)
+	// Create a group
+	groupParams := siatest.GroupParams{
+		Hosts:   5,
+		Renters: 1,
+		Miners:  1,
+	}
+	tg, err := siatest.NewGroupFromTemplate(mainTestDir(t.Name()), groupParams)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer sf.Close()
+	defer func() {
+		if err := tg.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}()
+
+	// Create a client for siasync
+	sc := newTestClient(tg.Renters()[0])
+
+	// Create a new siafolder
+	sf, err := NewSiafolder(testDir, sc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := sf.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}()
 
 	testCreateDir := filepath.Join(testDir, "newdir")
 	err = os.Mkdir(testCreateDir, 0755)
@@ -158,7 +216,7 @@ func TestSiafolderCreateDirectory(t *testing.T) {
 	// should not upload empty directories
 	time.Sleep(time.Second)
 
-	if _, exists := mockClient.siaFiles["newdir"]; exists {
+	if _, exists := sf.files["newdir"]; exists {
 		t.Fatal("should not upload empty directories")
 	}
 
@@ -171,7 +229,7 @@ func TestSiafolderCreateDirectory(t *testing.T) {
 
 	time.Sleep(time.Second)
 
-	if _, exists := mockClient.siaFiles["newdir/testfile"]; !exists {
+	if _, exists := sf.files["newdir/testfile"]; !exists {
 		t.Fatal("should have uploaded file in newly created directory")
 	}
 }
@@ -179,12 +237,35 @@ func TestSiafolderCreateDirectory(t *testing.T) {
 // TestSiafolderFileWrite verifies that a file is deleted and re-uploaded when
 // it is changed on disk.
 func TestSiafolderFileWrite(t *testing.T) {
-	mockClient := newTestingClient()
-	sf, err := NewSiafolder(testDir, mockClient)
+	// Create a group
+	groupParams := siatest.GroupParams{
+		Hosts:   5,
+		Renters: 1,
+		Miners:  1,
+	}
+	tg, err := siatest.NewGroupFromTemplate(mainTestDir(t.Name()), groupParams)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer sf.Close()
+	defer func() {
+		if err := tg.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}()
+
+	// Create a client for siasync
+	sc := newTestClient(tg.Renters()[0])
+
+	// Create a new siafolder
+	sf, err := NewSiafolder(testDir, sc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := sf.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}()
 
 	newfile := filepath.Join(testDir, "newfile")
 	f, err := os.Create(newfile)
@@ -196,10 +277,10 @@ func TestSiafolderFileWrite(t *testing.T) {
 		os.Remove(f.Name())
 	}()
 
-	// wait a bit for the filesystem event to propogate
+	// wait a bit for the filesystem event to propagate
 	time.Sleep(time.Second)
 
-	oldChecksum, exists := mockClient.siaFiles["newfile"]
+	oldChecksum, exists := sf.files["newfile"]
 	if !exists {
 		t.Fatal("newfile should have been uploaded when it was created on disk")
 	}
@@ -212,7 +293,7 @@ func TestSiafolderFileWrite(t *testing.T) {
 
 	time.Sleep(time.Second)
 
-	newChecksum, exists := mockClient.siaFiles["newfile"]
+	newChecksum, exists := sf.files["newfile"]
 	if !exists {
 		t.Fatal("newfile did not exist after writing data to it")
 	}
